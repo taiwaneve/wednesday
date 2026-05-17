@@ -1,0 +1,19 @@
+# BarricadeGG Bot - Quoridor AI Agent 訓練所需的依賴包
+
+# 核心依賴
+stable-baselines3>=2.0.0
+gymnasium>=0.27.0
+sb3-contrib>=2.0.0
+numpy>=1.21.0
+
+# 可視化和監控
+tensorboard>=2.10.0
+matplotlib>=3.5.0
+
+# 其他工具
+tqdm>=4.62.0
+rich>=10.0.0
+playwright>=1.40.0
+
+# 可選依賴（用於 GPU 加速）
+# torch>=1.10.0  # 取消註釋以使用 GPU（需要 CUDA 支持）

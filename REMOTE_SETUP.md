@@ -40,14 +40,26 @@ python -m pip install -r requirements.txt
 python -m playwright install chromium
 ```
 5. 放置模型（示例）
-把模型檔 `quoridor_ppo_final.zip` 放到 `models/` 目錄，或提供絕對路徑給 `--model-path`。
-6. 執行 bot（可視化）
+把模型檔 `quoridor_ppo_final.zip` 或其他 `.zip` 檔放到 `models/` 目錄。
+6. 執行 bot_script：
 ```powershell
-python bot_script.py --model-path models/quoridor_ppo_final.zip
+python bot_script.py
 ```
-若遠端無 GUI，使用 headless（若腳本支援）：
+若要指定模型：
 ```powershell
-python bot_script.py --model-path models/quoridor_ppo_final.zip --headless
+python bot_script.py --model-name quoridor_ppo_100000_steps --headless
+```
+或執行資料夾內最新模型：
+```powershell
+python bot_script.py --model-name quoridor_ppo_final
+```
+7. 執行 testbot：
+```powershell
+python testbot.py
+```
+如果遠端無 GUI，也可加上 `--headless`：
+```powershell
+python testbot.py --headless
 ```
 
 ---
@@ -60,7 +72,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 python -m playwright install chromium
-python bot_script.py --model-path models/quoridor_ppo_final.zip
+python bot_script.py --model-name quoridor_ppo_final
 ```
 
 無頭環境建議：使用 `xvfb-run` 或 `xvfb` 虛擬顯示（若頁面在 headless 與 headful 行為不同）
@@ -82,7 +94,7 @@ python scripts/train.py --timesteps 100000
 
 ### 常見問題與排查
 - Playwright 無法啟動: 確認在相同 Python 環境執行 `python -m playwright install`，並檢查 PATH/權限
-- 找不到模型檔: 確認 `--model-path` 路徑正確或把檔放到 `models/`
+- 找不到模型檔: 確認 `--model-name` 或 `--model-dir` 參數正確，或把檔放到 `models/`
 - 頁面元素定位失敗: 增加 `wait_for_selector` timeout 或切換到可視模式觀察 DOM
 - 無網路或被防火牆封鎖: 確認遠端機器可連上 barricade.gg
 

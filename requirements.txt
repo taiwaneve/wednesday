@@ -1,4 +1,10 @@
 # BarricadeGG Bot - Quoridor AI Agent 訓練所需的依賴包
+#
+# 安裝後請務必執行：
+# python -m playwright install chromium
+#
+# 如果另一台裝置上需要同步 bot_script.py 與 testbot.py，請先建立完整 Python 環境，
+# 然後安裝此 requirements.txt，再安裝 Playwright 瀏覽器二進位。
 
 # 核心依賴
 stable-baselines3>=2.0.0
@@ -14,6 +20,7 @@ matplotlib>=3.5.0
 tqdm>=4.62.0
 rich>=10.0.0
 playwright>=1.40.0
+cloudpickle>=2.2.0
 
 # 可選依賴（用於 GPU 加速）
 # torch>=1.10.0  # 取消註釋以使用 GPU（需要 CUDA 支持）

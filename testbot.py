@@ -201,20 +201,41 @@ def click_move(page: Page, x: int, y: int) -> bool:
     )
 
 
-def click_wall(page: Page, orientation: str, row: int, col: int) -> bool:
+def click_wall(page: Page, wall_code: str) -> bool:
     """點擊棋盤上放置牆體。
-    
+
     Args:
-        orientation: 'h' (水平) 或 'v' (垂直)
-        row: 行號 (0-8)
-        col: 列號 (0-8)
+        wall_code: 例如 'hf5' 或 'vd4'
     """
+    orientation = wall_code[0].lower()
+    code = wall_code[1:]
+    if orientation not in {'h', 'v'}:
+        return False
+    if len(code) < 2:
+        return False
+    column = ord(code[0].lower()) - ord('a')
+    try:
+        groove = int(code[1:])
+    except ValueError:
+        return False
+    if not (0 <= column < BOARD_SIZE - 1 and 0 <= groove < BOARD_SIZE):
+        return False
+    page_row = BOARD_SIZE - 1 - groove
     kind = 'horizontal' if orientation == 'h' else 'vertical'
-    selector = f'[data-testid="slot-{kind}-{row}-{col}"]'
+    selector = f'[data-testid="slot-{kind}-{page_row}-{column}"]'
     if page.query_selector(selector) is None:
         return False
-    page.click(selector)
-    return True
+    return page.evaluate(
+        '''(sel) => {
+            const el = document.querySelector(sel);
+            if (!el) {
+                return false;
+            }
+            el.click();
+            return true;
+        }''',
+        selector,
+    )
 
 
 def print_status(state: Dict):
@@ -247,9 +268,9 @@ def print_help():
 指令列表:
   status              - 顯示當前棋盤狀態
   move <x> <y>        - 移動棋子到座標 (x, y)，例如: move 4 5
-  wall <h|v> <row> <col> - 放置牆體
-                        例如: wall h 0 1 (水平牆在第 0 行第 1 欄)
-                             wall v 2 3 (垂直牆在第 2 行第 3 欄)
+  wall <h|v><column><groove> - 放置牆體
+                        例如: wall hf5 (水平竪桿放置於 f5 槽)
+                             wall vd4 (垂直竪桿放置於 d4 槽)
   help                - 顯示此幫助信息
   quit                - 退出程式
 """)
@@ -312,28 +333,26 @@ def run_test_bot(url: str, headless: bool):
                         print("✗ 座標必須是整數")
 
                 elif cmd == 'wall':
-                    if len(tokens) < 4:
-                        print("✗ 用法: wall <h|v> <row> <col>")
+                    if len(tokens) < 2:
+                        print("✗ 用法: wall <h|v><column><groove>，例如 wall vd4")
                         continue
-                    try:
-                        orientation = tokens[1].lower()
-                        row, col = int(tokens[2]), int(tokens[3])
-                        if orientation not in ['h', 'v']:
-                            print("✗ 方向必須是 'h' (水平) 或 'v' (垂直)")
-                            continue
-                        if not (0 <= row < BOARD_SIZE and 0 <= col < BOARD_SIZE):
-                            print(f"✗ 座標超出範圍 (應為 0-{BOARD_SIZE-1})")
-                            continue
-                        wall_type = "水平" if orientation == 'h' else "垂直"
-                        print(f"執行: 放置 {wall_type} 牆在 ({row}, {col})")
-                        result = click_wall(page, orientation, row, col)
-                        if result:
-                            print("✓ 放置成功")
-                            time.sleep(0.5)
-                        else:
-                            print("✗ 放置失敗（可能位置無效或已有牆體）")
-                    except ValueError:
-                        print("✗ 行列必須是整數")
+                    wall_code = tokens[1].lower()
+                    if len(tokens) == 3 and tokens[1].lower() in ['h', 'v']:
+                        wall_code = tokens[1].lower() + tokens[2].lower()
+                    if not re.fullmatch(r'[hv][a-h][0-8]', wall_code):
+                        print("✗ 用法: wall <h|v><column><groove>，例如 wall vd4")
+                        continue
+                    orientation = wall_code[0]
+                    column = wall_code[1]
+                    groove = wall_code[2:]
+                    wall_type = "水平" if orientation == 'h' else "垂直"
+                    print(f"執行: 放置 {wall_type} 牆 {wall_code}")
+                    result = click_wall(page, wall_code)
+                    if result:
+                        print("✓ 放置成功")
+                        time.sleep(0.5)
+                    else:
+                        print("✗ 放置失敗（可能位置無效或已有牆體）")
 
                 else:
                     print(f"✗ 未知指令: {cmd}，輸入 'help' 查看幫助")

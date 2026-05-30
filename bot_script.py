@@ -10,7 +10,14 @@ import re
 ROOT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT_DIR))
 
-from playwright.sync_api import Page, sync_playwright
+try:
+    from playwright.sync_api import Page, sync_playwright
+except ModuleNotFoundError:
+    print('錯誤：找不到 Playwright 模組。請在此 Python 環境中安裝 Playwright：')
+    print(f'  {sys.executable} -m pip install playwright')
+    print(f'  {sys.executable} -m playwright install chromium')
+    raise
+
 from sb3_contrib import MaskablePPO
 
 from barricade_core import QuoridorEnv, Board, action_id_to_action, pos_to_xy
@@ -26,12 +33,15 @@ def parse_page_state(page: Page) -> Dict:
 
     cells = []
     for el in board.query_selector_all('div'):
+        cls = el.get_attribute('class') or ''
+        if 'cursor-pointer' not in cls:
+            continue
         style = el.get_attribute('style') or ''
         m = re.search(r'grid-area:\s*([^;]+)', style)
         if not m:
             continue
         parts = [p.strip() for p in m.group(1).split('/')]
-        if len(parts) != 2:
+        if len(parts) < 2:
             continue
         try:
             row = int(parts[0])
@@ -95,8 +105,15 @@ def parse_page_state(page: Page) -> Dict:
             row = int(parts[2]); col = int(parts[3])
         except ValueError:
             continue
-        occupied = page.evaluate('(e) => !!e.firstElementChild', el)
-        walls['horizontal'].append({'row': row, 'col': col, 'occupied': occupied})
+        occupied = page.evaluate('''(node) => {
+            const child = node.firstElementChild;
+            if (!child) return false;
+            const tid = child.getAttribute('data-testid') || '';
+            if (tid.startsWith('wall-bar-')) return true;
+            const cls = child.className || '';
+            return !cls.includes('bg-transparent') && !cls.includes('opacity-0');
+        }''', el)
+        walls['horizontal'].append({'row': row, 'col': col, 'occupied': bool(occupied)})
 
     for el in page.query_selector_all('[data-testid^="slot-vertical-"]'):
         testid = el.get_attribute('data-testid') or ''
@@ -107,8 +124,15 @@ def parse_page_state(page: Page) -> Dict:
             row = int(parts[2]); col = int(parts[3])
         except ValueError:
             continue
-        occupied = page.evaluate('(e) => !!e.firstElementChild', el)
-        walls['vertical'].append({'row': row, 'col': col, 'occupied': occupied})
+        occupied = page.evaluate('''(node) => {
+            const child = node.firstElementChild;
+            if (!child) return false;
+            const tid = child.getAttribute('data-testid') || '';
+            if (tid.startsWith('wall-bar-')) return true;
+            const cls = child.className || '';
+            return !cls.includes('bg-transparent') && !cls.includes('opacity-0');
+        }''', el)
+        walls['vertical'].append({'row': row, 'col': col, 'occupied': bool(occupied)})
 
     players = []
     for el in page.query_selector_all('div[data-tutorial="player-cards"]'):
@@ -296,6 +320,23 @@ def click_move(page: Page, x: int, y: int) -> bool:
     )
 
 
+def is_wall_slot_occupied_dom(page: Page, wall_code: str) -> bool:
+    orientation, code = wall_code[0], wall_code[1:]
+    column = ord(code[0]) - ord('a')
+    groove = int(code[1:])
+    page_row = BOARD_SIZE - 1 - groove
+    kind = 'horizontal' if orientation == 'h' else 'vertical'
+    selector = f'[data-testid="slot-{kind}-{page_row}-{column}"]'
+    return page.evaluate(
+        '''(sel) => {
+            const el = document.querySelector(sel);
+            if (!el) return false;
+            return !!el.querySelector('[data-testid^="wall-bar-"]');
+        }''',
+        selector,
+    )
+
+
 def click_wall(page: Page, wall_code: str) -> bool:
     orientation, code = wall_code[0], wall_code[1:]
     column = ord(code[0]) - ord('a')
@@ -305,8 +346,91 @@ def click_wall(page: Page, wall_code: str) -> bool:
     selector = f'[data-testid="slot-{kind}-{page_row}-{column}"]'
     if page.query_selector(selector) is None:
         return False
-    page.click(selector)
-    return True
+    if is_wall_slot_occupied_dom(page, wall_code):
+        return False
+    page.evaluate(
+        '''(sel) => {
+            const el = document.querySelector(sel);
+            if (!el) {
+                return false;
+            }
+            el.click();
+            return true;
+        }''',
+        selector,
+    )
+    page.wait_for_timeout(150)
+    return is_wall_slot_occupied_dom(page, wall_code)
+
+
+def wall_code_to_slot(wall_code: str):
+    orientation = wall_code[0].lower()
+    if orientation not in {'h', 'v'}:
+        return None
+    code = wall_code[1:]
+    if len(code) < 2:
+        return None
+    column = ord(code[0].lower()) - ord('a')
+    try:
+        groove = int(code[1:])
+    except ValueError:
+        return None
+    if not (0 <= column < BOARD_SIZE - 1 and 1 <= groove < BOARD_SIZE):
+        return None
+    page_row = BOARD_SIZE - 1 - groove
+    kind = 'horizontal' if orientation == 'h' else 'vertical'
+    return kind, page_row, column, groove
+
+
+def slot_to_wall_code(kind: str, page_row: int, column: int) -> str:
+    groove = BOARD_SIZE - 1 - page_row
+    letter = chr(ord('a') + column)
+    prefix = 'h' if kind == 'horizontal' else 'v'
+    return f'{prefix}{letter}{groove}'
+
+
+def is_wall_slot_occupied(state: Dict, wall_code: str) -> bool:
+    slot = wall_code_to_slot(wall_code)
+    if slot is None:
+        return False
+    kind, row, col, _ = slot
+    for wall in state.get('walls', {}).get(kind, []):
+        if wall['row'] == row and wall['col'] == col:
+            return bool(wall['occupied'])
+    return False
+
+
+def candidate_wall_codes(wall_code: str) -> list[str]:
+    slot = wall_code_to_slot(wall_code)
+    if slot is None:
+        return []
+    orientation = wall_code[0].lower()
+    column = wall_code[1].lower()
+    groove = int(wall_code[2:])
+    candidates = []
+    for delta in [0, 1, -1, 2, -2, 3, -3, 4, -4]:
+        new_groove = groove + delta
+        if 1 <= new_groove < BOARD_SIZE:
+            candidates.append(f'{orientation}{column}{new_groove}')
+    seen = []
+    for code in candidates:
+        if code not in seen:
+            seen.append(code)
+    return seen
+
+
+def click_wall_with_fallback(page: Page, state: Dict, wall_code: str) -> bool:
+    for candidate in candidate_wall_codes(wall_code):
+        if state is not None and candidate != wall_code and is_wall_slot_occupied(state, candidate):
+            continue
+        if is_wall_slot_occupied_dom(page, candidate):
+            continue
+        clicked = click_wall(page, candidate)
+        if clicked:
+            if candidate != wall_code:
+                print(f'原始牆體 {wall_code} 不可用，改用 {candidate}')
+            return True
+    return False
 
 
 def wait_for_turn_change(page: Page, original_state: Dict, side: str, timeout: int = 60) -> Dict:
@@ -360,7 +484,7 @@ def run_bot(model_path: str, url: str, side: str, headless: bool):
                 x, y = pos_to_xy(param)
                 clicked = click_move(page, x, y)
             else:
-                clicked = click_wall(page, param)
+                clicked = click_wall_with_fallback(page, state, param)
 
             if not clicked:
                 raise RuntimeError(f'無法在網頁上點擊動作: {move_type} {param}')
@@ -369,11 +493,15 @@ def run_bot(model_path: str, url: str, side: str, headless: bool):
             time.sleep(0.6)
 
             obs, mask, state = sync_env_from_page(page, env)
-            if env.board.check_win() is not None:
+            win = env.board.check_win()
+            print(f'執行後狀態：步數={step}, win={repr(win)}, valid_actions={sum(1 for v in mask if v)}')
+            print(f'  board current={env.board.current_player.pos}, other={env.board.other_player.pos}')
+            print(f'  mask sample={mask[:20]}')
+            if win:
                 print('遊戲結束')
                 break
 
-        print('腳本執行完成')
+        print(f'腳本執行完成，總步數={step}')
 
 
 def find_model_files(model_dir: str, model_name: str = None, run_all: bool = False):
@@ -408,13 +536,17 @@ def main():
     parser = argparse.ArgumentParser(description='在 barricade.gg/local 網頁上執行 BarricadeGG AI')
     parser.add_argument('--model-dir', type=str, default=str(ROOT_DIR / 'models'), help='模型資料夾路徑')
     parser.add_argument('--model-name', type=str, default=None, help='指定模型檔名或完整路徑 (.zip 可省略)')
+    parser.add_argument('--model-path', type=str, default=None, help='指定完整模型檔案路徑 (.zip)')
     parser.add_argument('--run-all', action='store_true', help='依序執行資料夾內所有模型')
     parser.add_argument('--url', type=str, default='https://barricade.gg/local', help='Barricade 網頁 URL')
     parser.add_argument('--side', choices=['both', 'red', 'blue'], default='both', help='AI 控制的角色')
     parser.add_argument('--headless', action='store_true', help='是否使用無頭模式')
     args = parser.parse_args()
 
-    model_files = find_model_files(args.model_dir, args.model_name, args.run_all)
+    if args.model_path:
+        model_files = [args.model_path]
+    else:
+        model_files = find_model_files(args.model_dir, args.model_name, args.run_all)
 
     for model_path in model_files:
         print(f'使用模型: {model_path}')

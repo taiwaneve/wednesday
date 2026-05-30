@@ -7,7 +7,7 @@ from typing import Dict, List, Tuple
 import re
 
 # 將專案根目錄加入 path，以便導入 barricade_core
-ROOT_DIR = Path(__file__).resolve().parent.parent
+ROOT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT_DIR))
 
 from playwright.sync_api import Page, sync_playwright
@@ -376,18 +376,56 @@ def run_bot(model_path: str, url: str, side: str, headless: bool):
         print('腳本執行完成')
 
 
+def find_model_files(model_dir: str, model_name: str = None, run_all: bool = False):
+    model_dir_path = Path(model_dir)
+    if model_name:
+        candidate = Path(model_name)
+        if not candidate.is_absolute():
+            candidate = model_dir_path / candidate
+        if candidate.exists():
+            return [str(candidate)]
+        # try adding .zip suffix
+        candidate_zip = candidate.with_suffix('.zip')
+        if candidate_zip.exists():
+            return [str(candidate_zip)]
+        raise FileNotFoundError(f'指定的模型不存在: {candidate}')
+
+    if not model_dir_path.exists():
+        raise FileNotFoundError(f'模型資料夾不存在: {model_dir}')
+
+    models = sorted([p for p in model_dir_path.glob('*.zip')], key=lambda p: p.stat().st_mtime, reverse=True)
+    if not models:
+        raise FileNotFoundError(f'在資料夾中未找到任何 .zip 模型: {model_dir}')
+
+    if run_all:
+        return [str(p) for p in models]
+
+    # default: return latest
+    return [str(models[0])]
+
+
 def main():
     parser = argparse.ArgumentParser(description='在 barricade.gg/local 網頁上執行 BarricadeGG AI')
-    parser.add_argument('--model-path', type=str, default=str(ROOT_DIR / 'models' / 'quoridor_ppo_final.zip'), help='AI 模型檔案路徑')
+    parser.add_argument('--model-dir', type=str, default=str(ROOT_DIR / 'models'), help='模型資料夾路徑')
+    parser.add_argument('--model-name', type=str, default=None, help='指定模型檔名或完整路徑 (.zip 可省略)')
+    parser.add_argument('--run-all', action='store_true', help='依序執行資料夾內所有模型')
     parser.add_argument('--url', type=str, default='https://barricade.gg/local', help='Barricade 網頁 URL')
     parser.add_argument('--side', choices=['both', 'red', 'blue'], default='both', help='AI 控制的角色')
     parser.add_argument('--headless', action='store_true', help='是否使用無頭模式')
     args = parser.parse_args()
 
-    if not os.path.exists(args.model_path):
-        raise FileNotFoundError(f'模型文件不存在: {args.model_path}')
+    model_files = find_model_files(args.model_dir, args.model_name, args.run_all)
 
-    run_bot(args.model_path, args.url, args.side, args.headless)
+    for model_path in model_files:
+        print(f'使用模型: {model_path}')
+        if not os.path.exists(model_path):
+            print(f'跳過：模型檔案不存在 {model_path}')
+            continue
+        try:
+            run_bot(model_path, args.url, args.side, args.headless)
+        except Exception as e:
+            print(f'執行模型 {model_path} 時發生錯誤: {e}')
+            # 繼續嘗試下一個模型（若有）
 
 
 if __name__ == '__main__':

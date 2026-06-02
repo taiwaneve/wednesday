@@ -321,35 +321,29 @@ def click_move(page: Page, x: int, y: int) -> bool:
     )
 
 
-def is_wall_slot_occupied_dom(page: Page, wall_code: str) -> bool:
-    orientation, code = wall_code[0], wall_code[1:]
-    column = ord(code[0]) - ord('a')
-    groove = int(code[1:])
-    page_row = BOARD_SIZE - 1 - groove
-    kind = 'horizontal' if orientation == 'h' else 'vertical'
-    selector = f'[data-testid="slot-{kind}-{page_row}-{column}"]'
-    return page.evaluate(
-        '''(sel) => {
-            const el = document.querySelector(sel);
-            if (!el) return false;
-            return !!el.querySelector('[data-testid^="wall-bar-"]');
-        }''',
-        selector,
-    )
-
-
 def click_wall(page: Page, wall_code: str) -> bool:
-    orientation, code = wall_code[0], wall_code[1:]
-    column = ord(code[0]) - ord('a')
-    groove = int(code[1:])
+    orientation = wall_code[0].lower()
+    code = wall_code[1:]
+    if orientation not in {'h', 'v'}:
+        return False
+    if len(code) < 2:
+        return False
+
+    column = ord(code[0].lower()) - ord('a')
+    try:
+        groove = int(code[1:])
+    except ValueError:
+        return False
+
+    if not (0 <= column < BOARD_SIZE - 1 and 0 <= groove < BOARD_SIZE):
+        return False
+
     page_row = BOARD_SIZE - 1 - groove
     kind = 'horizontal' if orientation == 'h' else 'vertical'
     selector = f'[data-testid="slot-{kind}-{page_row}-{column}"]'
     if page.query_selector(selector) is None:
         return False
-    if is_wall_slot_occupied_dom(page, wall_code):
-        return False
-    page.evaluate(
+    return page.evaluate(
         '''(sel) => {
             const el = document.querySelector(sel);
             if (!el) {
@@ -360,78 +354,6 @@ def click_wall(page: Page, wall_code: str) -> bool:
         }''',
         selector,
     )
-    page.wait_for_timeout(150)
-    return is_wall_slot_occupied_dom(page, wall_code)
-
-
-def wall_code_to_slot(wall_code: str):
-    orientation = wall_code[0].lower()
-    if orientation not in {'h', 'v'}:
-        return None
-    code = wall_code[1:]
-    if len(code) < 2:
-        return None
-    column = ord(code[0].lower()) - ord('a')
-    try:
-        groove = int(code[1:])
-    except ValueError:
-        return None
-    if not (0 <= column < BOARD_SIZE - 1 and 1 <= groove < BOARD_SIZE):
-        return None
-    page_row = BOARD_SIZE - 1 - groove
-    kind = 'horizontal' if orientation == 'h' else 'vertical'
-    return kind, page_row, column, groove
-
-
-def slot_to_wall_code(kind: str, page_row: int, column: int) -> str:
-    groove = BOARD_SIZE - 1 - page_row
-    letter = chr(ord('a') + column)
-    prefix = 'h' if kind == 'horizontal' else 'v'
-    return f'{prefix}{letter}{groove}'
-
-
-def is_wall_slot_occupied(state: Dict, wall_code: str) -> bool:
-    slot = wall_code_to_slot(wall_code)
-    if slot is None:
-        return False
-    kind, row, col, _ = slot
-    for wall in state.get('walls', {}).get(kind, []):
-        if wall['row'] == row and wall['col'] == col:
-            return bool(wall['occupied'])
-    return False
-
-
-def candidate_wall_codes(wall_code: str) -> list[str]:
-    slot = wall_code_to_slot(wall_code)
-    if slot is None:
-        return []
-    orientation = wall_code[0].lower()
-    column = wall_code[1].lower()
-    groove = int(wall_code[2:])
-    candidates = []
-    for delta in [0, 1, -1, 2, -2, 3, -3, 4, -4]:
-        new_groove = groove + delta
-        if 1 <= new_groove < BOARD_SIZE:
-            candidates.append(f'{orientation}{column}{new_groove}')
-    seen = []
-    for code in candidates:
-        if code not in seen:
-            seen.append(code)
-    return seen
-
-
-def click_wall_with_fallback(page: Page, state: Dict, wall_code: str) -> bool:
-    for candidate in candidate_wall_codes(wall_code):
-        if state is not None and candidate != wall_code and is_wall_slot_occupied(state, candidate):
-            continue
-        if is_wall_slot_occupied_dom(page, candidate):
-            continue
-        clicked = click_wall(page, candidate)
-        if clicked:
-            if candidate != wall_code:
-                print(f'原始牆體 {wall_code} 不可用，改用 {candidate}')
-            return True
-    return False
 
 
 def wait_for_turn_change(page: Page, original_state: Dict, side: str, timeout: int = 60) -> Dict:
@@ -475,7 +397,7 @@ def run_bot(model_path: str, url: str, side: str, headless: bool):
         print(f"已載入環境統計數據: {stats_path}")
     else:
         print("警告：找不到對應的 env 統計檔案，AI 性能可能下降")
-
+    
     # 3. 載入模型
     model = MaskablePPO.load(model_path, env=vec_env)
 
@@ -512,8 +434,7 @@ def run_bot(model_path: str, url: str, side: str, headless: bool):
                 x, y = pos_to_xy(param)
                 clicked = click_move(page, x, y)
             else:
-                # 保留原有的 fallback 流程
-                clicked = click_wall_with_fallback(page, state, param)
+                clicked = click_wall(page, param)
 
             if not clicked:
                 raise RuntimeError(f'無法在網頁上點擊動作: {move_type} {param}')
